@@ -232,5 +232,114 @@
 
 
 
-#-------------------17/12/24
+#-------------------17/12/24-------------------
+
+from fastapi import FastAPI, Depends, HTTPException, status
+from fastapi.security import OAuth2PasswordBearer
+import jwt
+from sqlalchemy.orm import Session
+from database import engine, SessionLocal, Base
+from models import User, Task
+from schemas import UserCreate, UserResponse, TaskCreate, TaskResponse, TaskListResponse
+from auth import ALGORITHM, SECRET_KEY, hash_password, verify_password, create_access_token, ACCESS_TOKEN_EXPIRE_MINUTES
+from datetime import timedelta
+
+#import main
+from models import User
+from sqlalchemy.orm import Session
+
+#Create Tables
+Base.metadata.create_all(bind=engine)
+
+oauth2_scheme = OAuth2PasswordBearer(tokenUrl="login")
+
+#Initialize FastAPI
+app = FastAPI()
+
+
+# Dependency to get the database session
+def get_db():
+    db = SessionLocal()
+    try:
+        yield db
+    finally:
+        db.close()
+
+
+# Dependency to get the current user from the token
+def get_current_user(token: str = Depends(oauth2_scheme), db: Session = Depends(get_db)):
+    try:
+        payload = jwt.decode(token, SECRET_KEY, algorithms=[ALGORITHM])
+        username: str = payload.get("sub")
+        if username is None:
+            raise HTTPException(status_code=401, detail="Could not validate credentials")
+        db_user = db.query(User).filter(User.username == username).first()
+        if db_user is None:
+            raise HTTPException(status_code=401, detail="User not found")
+        return db_user
+    except jwt.JWTError:
+        raise HTTPException(status_code=401, detail="Could not validate credentials")
+
+
+# --- User Registration ---
+@app.post("/register/", response_model = UserResponse)
+def register(user: UserCreate, db: Session = Depends(get_db)):
+    db_user = db.query(User).filter(User.username == user.username).first()
+    if db_user:
+        raise HTTPException(status_code=400, detail="Username already registered")
+    hashed_password = hash_password(user.password)
+    new_user = User(username=user.username, hashed_password=hashed_password)
+    db.add(new_user)
+    db.commit()
+    db.refresh(new_user)
+    return new_user
+
+
+# --- User Login ---
+@app.post("/login/")
+def login(user: UserCreate, db: Session = Depends(get_db)):
+    db_user = db.query(User).filter(User.username == user.username).first()
+    if not db_user or not verify_password(user.password, db_user.hashed_password):
+        raise HTTPException(status_code=401, detail="Invalid credentials")
+    access_token = create_access_token(data={"sub": user.username}, expires_delta=timedelta(minutes=ACCESS_TOKEN_EXPIRE_MINUTES))
+    return {"access_token": access_token, "token_type": "bearer"}
+
+
+
+# --- Create Task ---
+#@app.post("/tasks/", response_model=TaskResponse)
+# def create_task(task: TaskCreate, db: Session = Depends(get_db), current_user: User = Depends(get_current_user)):
+#     new_task = Task(**task.dict(), owner_id=current_user.id) # Mocked owner_id
+#     db.add(new_task)
+#     db.commit()
+#     db.refresh(new_task)
+#     return new_task
+@app.post("/tasks/", response_model=TaskResponse)
+def create_task(task: TaskCreate, db: Session = Depends(get_db), current_user: User = Depends(get_current_user)):
+    # Check if the task with the same title already exists for the current user
+    existing_task = db.query(Task).filter(Task.title == task.title, Task.owner_id == current_user.id).first()
+    if existing_task:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="A task with this title already exists."
+        )
+
+    # If no existing task, create the new task
+    new_task = Task(**task.dict(), owner_id=current_user.id)
+    db.add(new_task)
+    db.commit()
+    db.refresh(new_task)
+    return new_task
+
+
+# --- List Tasks ---
+@app.get("/tasks/", response_model=TaskListResponse)
+def get_tasks(db: Session = Depends(get_db), current_user: User = Depends(get_current_user)):
+    tasks = db.query(Task).filter(Task.owner_id == current_user.id).all()  # Mocked owner_id
+    return {"tasks": tasks}
+ 
+
+
+
+
 
