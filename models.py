@@ -38,6 +38,8 @@
 
 #------------------------17/12/24--------------------
 
+
+#Define database models for User and Task.
 from sqlalchemy import Column, Integer, String, ForeignKey, Boolean
 from sqlalchemy.orm import relationship
 from database import Base
